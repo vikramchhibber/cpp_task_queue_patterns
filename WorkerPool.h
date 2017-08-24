@@ -18,7 +18,6 @@ public:
   ~WorkerPool();
 
   void Add(WorkItemPtr work_item);
-  void Finalize();
 
 private:
   void DoWork();
