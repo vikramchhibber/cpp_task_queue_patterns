@@ -2,10 +2,21 @@
 
 #include "WorkerPool.h"
 
-WorkerPool::WorkerPool(uint32_t pool_size):
-  finished_(false) {
+WorkerPool::WorkerPool(const AppCallback& callback, uint32_t pool_size):
+  callback_(callback), finished_(false) {
   for (uint32_t i = 0; i < pool_size; ++i) {
     threads_.emplace_back(&WorkerPool::DoWork, this);
+  }
+}
+
+WorkerPool::~WorkerPool() {
+  { // Lock scope
+    std::unique_lock<std::mutex> lock(mutex_);
+    finished_ = true;
+  }
+  cond_.notify_all();
+  for (std::thread& thread: threads_) {
+    thread.join();
   }
 }
 
@@ -36,28 +47,17 @@ void WorkerPool::DoWork() {
     }
     if (work_item) {
       work_item->Process();
-      ReadyForDelivery(work_item);
+      callback_(work_item);
     }
   }
 }
 
-void WorkerPool::ReadyForDelivery(WorkItemPtr work_item) {
+void ReadyForDelivery(WorkItemPtr work_item) {
   std::shared_ptr<SleepyWorkItem> sleepy_work_item = 
       std::dynamic_pointer_cast<SleepyWorkItem> (work_item);
   std::cout << "Id " << sleepy_work_item->id() << ", " << 
       sleepy_work_item->msec_duration() << 
       " millisec is ready for delivery!" << std::endl;
-}
-
-void WorkerPool::Finalize() {
-  { // Lock scope
-    std::unique_lock<std::mutex> lock(mutex_);
-    finished_ = true;
-  }
-  cond_.notify_all();
-  for (std::thread& thread: threads_) {
-    thread.join();
-  }
 }
 
 int main(int argc, char** argv) {
@@ -68,12 +68,13 @@ int main(int argc, char** argv) {
   items.emplace_back(std::make_shared<SleepyWorkItem>(4, 200));
   items.emplace_back(std::make_shared<SleepyWorkItem>(5, 300));
 
-  WorkerPool worker_pool(4);
   auto start = std::chrono::high_resolution_clock::now();
-  for (WorkItemPtr item: items) {
-    worker_pool.Add(item);
+  { // Object scope
+    WorkerPool worker_pool(std::bind(&ReadyForDelivery, std::placeholders::_1), 4);
+    for (WorkItemPtr item: items) {
+      worker_pool.Add(item);
+    }
   }
-  worker_pool.Finalize();
   auto end = std::chrono::high_resolution_clock::now();
   std::cout << "Completed work items in " << 
     std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " milliseconds." << std::endl;

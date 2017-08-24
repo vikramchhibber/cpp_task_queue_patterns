@@ -2,8 +2,17 @@
 
 #include "Worker.h"
 
-Worker::Worker():
-  thread_(&Worker::DoWork, this), finished_(false) {
+Worker::Worker(const AppCallback& callback):
+  callback_(callback), thread_(&Worker::DoWork, this), finished_(false) {
+}
+
+Worker::~Worker() {
+  { // Lock scope
+    std::unique_lock<std::mutex> lock(mutex_);
+    finished_ = true;
+  }
+  cond_.notify_one();
+  thread_.join();
 }
 
 // Producer thread context
@@ -33,26 +42,17 @@ void Worker::DoWork() {
     }
     if (work_item) {
       work_item->Process();
-      ReadyForDelivery(work_item);
+      callback_(work_item);
     }
   }
 }
 
-void Worker::ReadyForDelivery(WorkItemPtr work_item) {
+void ReadyForDelivery(WorkItemPtr work_item) {
   std::shared_ptr<SleepyWorkItem> sleepy_work_item = 
       std::dynamic_pointer_cast<SleepyWorkItem> (work_item);
   std::cout << "Id " << sleepy_work_item->id() << ", " << 
       sleepy_work_item->msec_duration() << 
       " millisec is ready for delivery!" << std::endl;
-}
-
-void Worker::Finalize() {
-  { // Lock scope
-    std::unique_lock<std::mutex> lock(mutex_);
-    finished_ = true;
-  }
-  cond_.notify_one();
-  thread_.join();
 }
 
 int main(int argc, char** argv) {
@@ -63,12 +63,13 @@ int main(int argc, char** argv) {
   items.emplace_back(std::make_shared<SleepyWorkItem>(4, 200));
   items.emplace_back(std::make_shared<SleepyWorkItem>(5, 300));
 
-  Worker worker;
   auto start = std::chrono::high_resolution_clock::now();
-  for (WorkItemPtr item: items) {
-    worker.Add(item);
+  {
+    Worker worker(std::bind(&ReadyForDelivery, std::placeholders::_1));
+    for (WorkItemPtr item: items) {
+      worker.Add(item);
+    }
   }
-  worker.Finalize();
   auto end = std::chrono::high_resolution_clock::now();
   std::cout << "Completed work items in " << 
     std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " milliseconds." << std::endl;

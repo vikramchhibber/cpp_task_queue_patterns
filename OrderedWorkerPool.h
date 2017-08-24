@@ -12,17 +12,19 @@
 
 class OrderedWorkerPool {
 public:
-  OrderedWorkerPool(uint32_t pool_size);
-  ~OrderedWorkerPool() = default;
+  typedef std::function<void (WorkItemPtr)> AppCallback;
+
+  OrderedWorkerPool(const AppCallback& callback, uint32_t pool_size);
+  ~OrderedWorkerPool();
 
   void Add(WorkItemPtr work_item);
-  void Finalize();
 
 private:
   void DoWork();
   void DoDelivery();
   void ReadyForDelivery(WorkItemPtr work_item);
 
+  const AppCallback callback_;
   // Consumer threads and their queue
   std::queue<WorkItemPtr> queue_;
   std::vector<std::thread> threads_;

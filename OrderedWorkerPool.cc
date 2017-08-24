@@ -2,12 +2,31 @@
 
 #include "OrderedWorkerPool.h"
 
-OrderedWorkerPool::OrderedWorkerPool(uint32_t pool_size):
-  finished_(false), delivery_thread_(&OrderedWorkerPool::DoDelivery, this), 
+OrderedWorkerPool::OrderedWorkerPool(const AppCallback& callback, uint32_t pool_size):
+  callback_(callback), finished_(false), delivery_thread_(&OrderedWorkerPool::DoDelivery, this), 
   delivery_finished_(false) {
   for (uint32_t i = 0; i < pool_size; ++i) {
     threads_.emplace_back(&OrderedWorkerPool::DoWork, this);
   }
+}
+
+OrderedWorkerPool::~OrderedWorkerPool() {
+  { // Lock scope
+    std::unique_lock<std::mutex> lock(mutex_);
+    finished_ = true;
+  }
+  cond_.notify_all();
+  for (std::thread& thread: threads_) {
+    thread.join();
+  }
+  { // Lock scope
+    std::unique_lock<std::mutex> lock(delivery_mutex_);
+    if (delivery_queue_.empty()) {
+      delivery_finished_ = true;
+    }
+  }
+  delivery_cond_.notify_one();
+  delivery_thread_.join();
 }
 
 // Producer thread context
@@ -67,36 +86,17 @@ void OrderedWorkerPool::DoDelivery() {
       }
     }
     if (work_item) {
-      ReadyForDelivery(work_item);
+      callback_(work_item);
     }
   }
 }
 
-void OrderedWorkerPool::ReadyForDelivery(WorkItemPtr work_item) {
+void ReadyForDelivery(WorkItemPtr work_item) {
   std::shared_ptr<SleepyWorkItem> sleepy_work_item = 
       std::dynamic_pointer_cast<SleepyWorkItem> (work_item);
   std::cout << "Id " << sleepy_work_item->id() << ", " << 
       sleepy_work_item->msec_duration() << 
       " millisec is ready for delivery!" << std::endl;
-}
-
-void OrderedWorkerPool::Finalize() {
-  { // Lock scope
-    std::unique_lock<std::mutex> lock(mutex_);
-    finished_ = true;
-  }
-  cond_.notify_all();
-  for (std::thread& thread: threads_) {
-    thread.join();
-  }
-  { // Lock scope
-    std::unique_lock<std::mutex> lock(delivery_mutex_);
-    if (delivery_queue_.empty()) {
-      delivery_finished_ = true;
-    }
-  }
-  delivery_cond_.notify_one();
-  delivery_thread_.join();
 }
 
 int main(int argc, char** argv) {
@@ -107,12 +107,13 @@ int main(int argc, char** argv) {
   items.emplace_back(std::make_shared<SleepyWorkItem>(4, 200));
   items.emplace_back(std::make_shared<SleepyWorkItem>(5, 300));
 
-  OrderedWorkerPool worker_pool(4);
   auto start = std::chrono::high_resolution_clock::now();
-  for (WorkItemPtr item: items) {
-    worker_pool.Add(item);
+  { // Object scope
+    OrderedWorkerPool worker_pool(std::bind(&ReadyForDelivery, std::placeholders::_1), 4);
+    for (WorkItemPtr item: items) {
+      worker_pool.Add(item);
+    }
   }
-  worker_pool.Finalize();
   auto end = std::chrono::high_resolution_clock::now();
   std::cout << "Completed work items in " << 
     std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " milliseconds." << std::endl;

@@ -11,16 +11,17 @@
 
 class Worker {
 public:
-  Worker();
-  ~Worker() = default;
+  typedef std::function<void (WorkItemPtr)> AppCallback;
+
+  Worker(const AppCallback& callback);
+  ~Worker();
 
   void Add(WorkItemPtr work_item);
-  void Finalize();
 
 private:
   void DoWork();
-  void ReadyForDelivery(WorkItemPtr work_item);
 
+  const AppCallback callback_;
   std::queue<WorkItemPtr> queue_;
   std::thread thread_;
   std::mutex mutex_;

@@ -11,16 +11,18 @@
 
 class OrderedWorkerPool2 {
 public:
-  OrderedWorkerPool2();
-  ~OrderedWorkerPool2() = default;
+  typedef std::function<void (WorkItemPtr)> AppCallback;
+
+  OrderedWorkerPool2(const AppCallback& callback);
+  ~OrderedWorkerPool2();
 
   void Add(WorkItemPtr work_item);
-  void Finalize();
 
 private:
   void DoDelivery();
   void ReadyForDelivery(WorkItemPtr work_item);
 
+  const AppCallback callback_;
   std::queue<std::future<WorkItemPtr>> queue_;
   std::thread thread_;
   std::mutex mutex_;

@@ -12,16 +12,18 @@
 
 class WorkerPool {
 public:
-  WorkerPool(uint32_t pool_size);
-  ~WorkerPool() = default;
+  typedef std::function<void (WorkItemPtr)> AppCallback;
+
+  WorkerPool(const AppCallback& callback, uint32_t pool_size);
+  ~WorkerPool();
 
   void Add(WorkItemPtr work_item);
   void Finalize();
 
 private:
   void DoWork();
-  void ReadyForDelivery(WorkItemPtr work_item);
 
+  const AppCallback callback_;
   std::queue<WorkItemPtr> queue_;
   std::vector<std::thread> threads_;
   std::mutex mutex_;
